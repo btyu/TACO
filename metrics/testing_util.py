@@ -77,31 +77,30 @@ def run_test(sample, test=None, debug=False):
             synthesized_code, exec_code = synthesize_std_code(test, debug)
             method_func = compile_and_get_func(synthesized_code, which_type, method_name, timeout=TIMEOUT, debug=debug)
         if not method_func:
-            results.append(-2)
+            results.append((-2, None))
             return results
         else:
             if which_type == CODE_TYPE.call_based:  # Call-based
                 detail_results, debug_infos = execute_cb_code(method_func, inputs_list, outputs_list, timeout=TIMEOUT, early_stop=False, debug=debug)
             elif which_type == CODE_TYPE.standard_input:
-                detail_results = execute_std_code(exec_code, inputs_list, outputs_list, timeout=TIMEOUT, early_stop=False, debug=debug)
-                debug_infos = detail_results.get('debug', None)
-                detail_results = {k:v for k, v in detail_results.items() if k!='debug'}
+                detail_results, debug_infos = execute_std_code(exec_code, inputs_list, outputs_list, timeout=TIMEOUT, early_stop=False, debug=debug)
                 if set(detail_results.values()) == {(False, 'returncode:1')}:
-                    detail_results = execute_std_code(synthesized_code+'\ncode()\n', inputs_list, outputs_list, timeout=TIMEOUT, early_stop=False, debug=debug)
+                    detail_results, debug_infos = execute_std_code(synthesized_code+'\ncode()\n', inputs_list, outputs_list, timeout=TIMEOUT, early_stop=False, debug=debug)
                 
         if isinstance(detail_results, list):
             if len(detail_results) == 1:
                 detail_results = detail_results * len(inputs_list)
             detail_results = dict(zip([i for i in range(len(inputs_list))], detail_results))
         for test_id, test_result in detail_results.items():
+            debug_info = debug_infos[test_id]
             if test_result[1] == "passed":
-                results.append(True)
+                results.append((True, debug_info))
             elif test_result[1] == "false":
-                results.append(False)
+                results.append((False, debug_info))
             elif test_result[1] == "timeout":
-                results.append(-1)
+                results.append((-1, debug_info))
             else:
-                results.append(-3)
+                results.append((-3, debug_info))
         return results
 
 def process_input_output(inputs, outputs):
@@ -223,8 +222,7 @@ def execute_cb_code(method, inputs_list, outputs_list, timeout, early_stop=False
     results = []
     debug_infos = {}
     for index, inputs in enumerate(inputs_list):
-        if debug:
-            debug_infos[index] = {}
+        debug_infos[index] = None
         signal.alarm(timeout) 
         faulthandler.enable()
         outputs = outputs_list[index]
@@ -237,6 +235,7 @@ def execute_cb_code(method, inputs_list, outputs_list, timeout, early_stop=False
                 print(f"Standard input runtime error = {e}")
             results.append((False, EXECUTION_RESULTS[-2]))
             continue
+
         try:
             # ground truth sequences are not tuples
             if isinstance(exec_outputs, tuple):
@@ -271,11 +270,11 @@ def execute_cb_code(method, inputs_list, outputs_list, timeout, early_stop=False
         signal.alarm(0)
         if debug:
             print(f"outputs = {exec_outputs}, test outputs = {outputs}, inputs = {inputs}, {type(inputs)}, {exec_outputs == [outputs]}")
-            debug_infos[index] = {
-                    'inputs': inputs,
-                    'gt_outputs': outputs,
-                    'exec_outputs': exec_outputs
-                }
+        debug_infos[index] = {
+            'inputs': inputs,
+            'gt_outputs': outputs,
+            'exec_outputs': exec_outputs
+        }
     return results, debug_infos
 
 def remove_tmp_files():
@@ -291,9 +290,9 @@ def execute_std_code(synthesized_code, inputs_list, outputs_list, timeout, early
     assert isinstance(inputs_list, list) and isinstance(outputs_list, list)
     assert len(inputs_list) == len(outputs_list)
     exec_results = {}
-    if debug:
-        exec_results['debug'] = {}
+    debug_infos = {}
     for i, inputs in enumerate(inputs_list):
+        debug_infos[i] = None
         remove_tmp_files()
         outputs = outputs_list[i]
         if isinstance(inputs, list):
@@ -343,14 +342,14 @@ def execute_std_code(synthesized_code, inputs_list, outputs_list, timeout, early
         if exec_code >= 0:
             if debug:
                 print_debug_info(inputs=inputs, outputs=outputs, exec_outputs=result.stdout)
-                exec_results['debug'][i] = {
-                    'inputs': inputs,
-                    'gt_outputs': outputs,
-                    'exec_outputs': result.stdout
-                }
+            debug_infos[i] = {
+                'inputs': inputs,
+                'gt_outputs': outputs,
+                'exec_outputs': result.stdout
+            }
         if early_stop and exec_code<=0:
             break
-    return exec_results
+    return exec_results, debug_infos
 
 def print_debug_info(inputs, outputs, exec_outputs):
     nl = "\n"
